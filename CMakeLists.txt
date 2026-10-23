@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.13.2)
 
-set(PROJ_NAME frontend)
+set(PROJ_NAME hammernail)
 project(${PROJ_NAME} CXX C)
 set(EXE_NAME ${PROJ_NAME})
 set(CMAKE_CXX_STANDARD 23)
@@ -12,6 +12,7 @@ include_directories(
 
 add_executable(${PROJ_NAME}
 	src/main.cpp
+	src/mini-rv64.cpp
 )
 
 #add_subdirectory(vendor/glfw)
