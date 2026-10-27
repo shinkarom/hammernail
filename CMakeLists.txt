@@ -10,14 +10,21 @@ include_directories(
 	src
 	)
 
+add_library(amd64 STATIC
+	src/amd64/amd64.c
+	src/amd64/fpu.c
+	src/amd64/i386.c
+	)
+
+target_include_directories(amd64 PUBLIC src/amd64)
+
 add_executable(${PROJ_NAME}
 	src/main.cpp
 	src/mini-rv64.cpp
 )
 
-#add_subdirectory(vendor/glfw)
 add_subdirectory(vendor/raylib)
-target_link_libraries(${PROJ_NAME} raylib)
+target_link_libraries(${PROJ_NAME} raylib amd64)
 
 set_target_properties(${PROJ_NAME} PROPERTIES
 	LINKER_LANGUAGE CXX
