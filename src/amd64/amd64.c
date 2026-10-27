@@ -1,6 +1,5 @@
 // "pure" 64bit x86 cpu
 // long mode only, no compat mode, no rarely used features
-#ifdef USE_AMD64
 #include "amd64.h"
 #include <inttypes.h>
 #include <stdio.h>
@@ -4534,4 +4533,3 @@ static void cpu_debug(CPUAMD64 *cpu)
 	cpu->excerr = excerr;
 	nest--;
 }
-#endif
