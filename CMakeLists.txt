@@ -6,21 +6,13 @@ set(EXE_NAME ${PROJ_NAME})
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
 
-add_library(amd64 STATIC
-	src/amd64/amd64.c
-	src/amd64/fpu.c
-	src/amd64/i386.c
-	)
-
-target_include_directories(amd64 PUBLIC src/amd64)
-
 add_executable(${PROJ_NAME}
 	src/main.cpp
 	src/mini-rv64.cpp
 )
 
 add_subdirectory(vendor/raylib)
-target_link_libraries(${PROJ_NAME} raylib amd64)
+target_link_libraries(${PROJ_NAME} raylib)
 target_include_directories(${PROJ_NAME} PUBLIC src)
 set_target_properties(${PROJ_NAME} PROPERTIES
 	LINKER_LANGUAGE CXX

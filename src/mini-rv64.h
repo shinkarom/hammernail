@@ -2,7 +2,6 @@
 // mini-rv64.h
 // Complete 64-bit RISC-V Virtual Machine Core
 // Extensions: RV64I + RV64M + selected bit-manipulation extensions + Zicond + Syscalls
-// RV64A (atomics) and RV64C (compressed instructions) are not implemented.
 // ==============================================================================
 
 #ifndef _MINI_RV64_H
@@ -11,8 +10,12 @@
 #include <stdint.h>
 #include <string.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef MINIRV64_DECORATE
-    #define MINIRV64_DECORATE static
+    #define MINIRV64_DECORATE
 #endif
 
 #ifndef MINIRV64_RAM_IMAGE_OFFSET
@@ -273,8 +276,6 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
                 }
                 break;
             }
-
-
 
             case 0x13: // OP-IMM
             {
@@ -589,4 +590,9 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
 }
 
 #endif // MINIRV64_IMPLEMENTATION
-#endif // _MINI_RV64_H
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // _MINI_RV64_H	

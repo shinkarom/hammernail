@@ -2,9 +2,9 @@
 #include <span>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <raylib.h>
 
-// Standardized Inputs across all fantasy consoles/emulators
 enum class VirtualButton {
     Up, Down, Left, Right,
     ActionA, ActionB, ActionX, ActionY,
@@ -31,32 +31,47 @@ struct CoreConfig {
     int vramWidth = 320;
     int vramHeight = 240;
     PixelFormat pixelFormat = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
-    float targetAspectRatio = 4.0f / 3.0f; // Set <= 0 for dynamic aspect ratio
+    float targetAspectRatio = 4.0f / 3.0f;
     
     // Audio
     int sampleRate = 44100;
-    int audioChannels = 2; // 1 = Mono, 2 = Stereo
+    int audioChannels = 2;
 };
 
 class ICore {
 public:
     virtual ~ICore() = default;
 
-    // Configuration provided to the frontend at startup
-    virtual CoreConfig getConfig() const = 0;
+    // --- Core File / Memory Management ---
 
-    // Called once per frame to step emulation CPU/GPU logic
+    // The core opens, parses, and loads the file path into its internal memory/registers
+    virtual bool loadRomFile(std::string_view filePath) = 0;
+
+    // Optional: Load directly from memory (useful for WebAssembly or embedded files)
+    virtual bool loadRomData(std::span<const uint8_t> data) { return false; }
+
+    // Unload game, clear RAM/registers
+    virtual void unloadRom() = 0;
+
+    // Check if system is ready to step
+    virtual bool isRomLoaded() const = 0;
+
+    // Reset CPU/RAM state without unloading the ROM
+    virtual void reset() = 0;
+
+    // --- System Logic ---
+    virtual CoreConfig getConfig() const = 0;
     virtual void stepFrame() = 0;
 
-    // Graphics
+    // --- Graphics ---
     virtual const void* getFramebuffer() const = 0;
     virtual DisplayRegion getDisplayRegion() const = 0;
 
-    // Audio
+    // --- Audio ---
     virtual std::span<const int16_t> getAudioSamples() = 0;
     virtual void clearAudioSamples() = 0;
 
-    // Input Handling
+    // --- Input ---
     virtual void setButton(int port, VirtualButton btn, bool pressed) = 0;
     virtual void setAxis(int port, VirtualAxis axis, float value) = 0;
 };
