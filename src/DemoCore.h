@@ -32,7 +32,7 @@
 class DemoCore : public ICore {
 public:
     DemoCore() {
-        m_ram.resize(RAM_SIZE, 0);
+        m_ram.resize(RAM_SIZE + 8, 0);
         m_audioBuffer.reserve((SAMPLE_RATE / static_cast<int>(TARGET_FPS)) * AUDIO_CH);
 
         // Load built-in CPU benchmark ROM by default
