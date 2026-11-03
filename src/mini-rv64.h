@@ -43,6 +43,7 @@ struct MiniRV64State {
     uint64_t mstatus;
     uint64_t mie;
     uint64_t mtvec;
+    uint64_t mscratch;
     uint64_t mepc;
     uint64_t mcause;
     uint64_t mtval;
@@ -61,18 +62,28 @@ MINIRV64_DECORATE void MiniRV64SetInterrupt(struct MiniRV64State *state, uint32_
 #define RV64_TRAP     2
 
 #ifndef MINIRV64_CUSTOM_MEMORY_BUS
-    #define MINIRV64_LOAD1(ofs)         (*(uint8_t*)(image + (ofs)))
-    #define MINIRV64_LOAD2(ofs)         (*(uint16_t*)(image + (ofs)))
-    #define MINIRV64_LOAD4(ofs)         (*(uint32_t*)(image + (ofs)))
-    #define MINIRV64_LOAD8(ofs)         (*(uint64_t*)(image + (ofs)))
-    #define MINIRV64_LOAD1_SIGNED(ofs)  (*(int8_t*)(image + (ofs)))
-    #define MINIRV64_LOAD2_SIGNED(ofs)  (*(int16_t*)(image + (ofs)))
-    #define MINIRV64_LOAD4_SIGNED(ofs)  (*(int32_t*)(image + (ofs)))
+    static inline uint8_t  minirv64_load1(const uint8_t *image, uint64_t ofs) { return image[ofs]; }
+    static inline uint16_t minirv64_load2(const uint8_t *image, uint64_t ofs) { uint16_t v; memcpy(&v, image + ofs, 2); return v; }
+    static inline uint32_t minirv64_load4(const uint8_t *image, uint64_t ofs) { uint32_t v; memcpy(&v, image + ofs, 4); return v; }
+    static inline uint64_t minirv64_load8(const uint8_t *image, uint64_t ofs) { uint64_t v; memcpy(&v, image + ofs, 8); return v; }
 
-    #define MINIRV64_STORE1(ofs, val)   (*(uint8_t*)(image + (ofs))  = (uint8_t)(val))
-    #define MINIRV64_STORE2(ofs, val)   (*(uint16_t*)(image + (ofs)) = (uint16_t)(val))
-    #define MINIRV64_STORE4(ofs, val)   (*(uint32_t*)(image + (ofs)) = (uint32_t)(val))
-    #define MINIRV64_STORE8(ofs, val)   (*(uint64_t*)(image + (ofs)) = (uint64_t)(val))
+    static inline void minirv64_store1(uint8_t *image, uint64_t ofs, uint8_t  v) { image[ofs] = v; }
+    static inline void minirv64_store2(uint8_t *image, uint64_t ofs, uint16_t v) { memcpy(image + ofs, &v, 2); }
+    static inline void minirv64_store4(uint8_t *image, uint64_t ofs, uint32_t v) { memcpy(image + ofs, &v, 4); }
+    static inline void minirv64_store8(uint8_t *image, uint64_t ofs, uint64_t v) { memcpy(image + ofs, &v, 8); }
+
+    #define MINIRV64_LOAD1(ofs)         minirv64_load1(image, (ofs))
+    #define MINIRV64_LOAD2(ofs)         minirv64_load2(image, (ofs))
+    #define MINIRV64_LOAD4(ofs)         minirv64_load4(image, (ofs))
+    #define MINIRV64_LOAD8(ofs)         minirv64_load8(image, (ofs))
+    #define MINIRV64_LOAD1_SIGNED(ofs)  ((int8_t)minirv64_load1(image, (ofs)))
+    #define MINIRV64_LOAD2_SIGNED(ofs)  ((int16_t)minirv64_load2(image, (ofs)))
+    #define MINIRV64_LOAD4_SIGNED(ofs)  ((int32_t)minirv64_load4(image, (ofs)))
+
+    #define MINIRV64_STORE1(ofs, val)   minirv64_store1(image, (ofs), (uint8_t)(val))
+    #define MINIRV64_STORE2(ofs, val)   minirv64_store2(image, (ofs), (uint16_t)(val))
+    #define MINIRV64_STORE4(ofs, val)   minirv64_store4(image, (ofs), (uint32_t)(val))
+    #define MINIRV64_STORE8(ofs, val)   minirv64_store8(image, (ofs), (uint64_t)(val))
 #endif
 
 MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *image, int count);
@@ -83,6 +94,8 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
 #define MINIRV64_MSTATUS_MPIE (1ULL << 7)
 #define MINIRV64_MSTATUS_MPP  (3ULL << 11)
 #define MINIRV64_MIP_MASK     ((1ULL << MINIRV64_IRQ_MSIP) | (1ULL << MINIRV64_IRQ_MTIP) | (1ULL << MINIRV64_IRQ_MEIP))
+
+#define MINIRV64_RETURN_TRAP() do { state->pc = pc; state->cycle = cycle; return RV64_TRAP; } while (0)
 
 MINIRV64_DECORATE void MiniRV64SetInterrupt(struct MiniRV64State *state, uint32_t cause, int asserted) {
     if (!state || cause >= 64) return;
@@ -96,7 +109,7 @@ static inline int minirv64_take_interrupt(struct MiniRV64State *state, uint64_t 
     uint64_t pending = state->mip & state->mie;
     if (!(state->mstatus & MINIRV64_MSTATUS_MIE) || !pending) return 0;
 
-    // Standard machine interrupt priority for this minimal core: external, software, timer.
+    // Standard machine interrupt priority: external (11), software (3), timer (7).
     uint32_t cause = (pending & (1ULL << MINIRV64_IRQ_MEIP)) ? MINIRV64_IRQ_MEIP :
                      (pending & (1ULL << MINIRV64_IRQ_MSIP)) ? MINIRV64_IRQ_MSIP :
                      (pending & (1ULL << MINIRV64_IRQ_MTIP)) ? MINIRV64_IRQ_MTIP : 64;
@@ -164,12 +177,12 @@ static inline uint64_t rv64_clmulr(uint64_t a, uint64_t b) {
 MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *image, int count) {
     uint64_t pc = state->pc;
     uint64_t cycle = state->cycle;
+    state->regs[0] = 0;
 
     for (int icount = 0; icount < count; icount++) {
         // Interrupts are sampled at instruction boundaries, before the next fetch.
         if (minirv64_take_interrupt(state, &pc)) {
             state->pc = pc;
-            // Interrupt entry consumes this step; the handler starts on the next step.
             cycle++;
             state->cycle = cycle;
             state->regs[0] = 0;
@@ -180,8 +193,7 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
 
         if (ofs_pc >= MINI_RV64_RAM_SIZE || (ofs_pc & 3) ||
             MINI_RV64_RAM_SIZE - ofs_pc < 4) {
-            state->pc = pc; state->cycle = cycle;
-            return RV64_TRAP;
+            MINIRV64_RETURN_TRAP();
         }
         uint32_t ir = MINIRV64_LOAD4(ofs_pc);
         const uint32_t ilen = 4;
@@ -200,10 +212,13 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
 
             case 0x6F: // JAL
             {
-                int64_t rel = (int64_t)(((int32_t)(ir & 0x80000000) >> 11) |
-                                        (ir & 0xff000) |
-                                        ((ir >> 9) & 0x800) |
-                                        ((ir >> 20) & 0x7fe));
+                // Cast to int32_t first so bitwise OR with uint32_t does not prevent 64-bit sign-extension
+                int64_t rel = (int64_t)(int32_t)(
+                    ((int32_t)(ir & 0x80000000) >> 11) |
+                    (ir & 0xff000) |
+                    ((ir >> 9) & 0x800) |
+                    ((ir >> 20) & 0x7fe)
+                );
                 rval = pc + ilen;
                 pc = pc + rel - ilen;
                 break;
@@ -219,9 +234,12 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
 
             case 0x63: // Branches
             {
-                int64_t imm = ((ir & 0x80000000) ? 0xfffffffffffffe00ULL : 0) |
-                              ((ir >> 19) & 0x1000) | ((ir >> 20) & 0x7e0) |
-                              ((ir >> 7) & 0x1e) | ((ir << 4) & 0x800);
+                int64_t imm = (int64_t)(int32_t)(
+                    ((int32_t)(ir & 0x80000000) >> 19) |
+                    ((ir << 4) & 0x800) |
+                    ((ir >> 20) & 0x7e0) |
+                    ((ir >> 7) & 0x1e)
+                );
                 uint64_t rs1 = state->regs[(ir >> 15) & 0x1f];
                 uint64_t rs2 = state->regs[(ir >> 20) & 0x1f];
                 uint64_t target = pc + imm - ilen;
@@ -233,7 +251,7 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
                     case 5: if ((int64_t)rs1 >= (int64_t)rs2) pc = target; break;
                     case 6: if (rs1 < rs2) pc = target; break;
                     case 7: if (rs1 >= rs2) pc = target; break;
-                    default: return RV64_TRAP;
+                    default: MINIRV64_RETURN_TRAP();
                 }
                 break;
             }
@@ -243,9 +261,13 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
                 uint64_t rs1 = state->regs[(ir >> 15) & 0x1f];
                 int64_t imm = (int64_t)(int32_t)ir >> 20;
                 uint64_t addy = rs1 + imm - MINIRV64_RAM_IMAGE_OFFSET;
-                if (addy >= MINI_RV64_RAM_SIZE) return RV64_TRAP;
+                uint32_t funct3 = (ir >> 12) & 0x7;
+                uint64_t access_size = 1ULL << (funct3 & 3);
+                if (addy >= MINI_RV64_RAM_SIZE || MINI_RV64_RAM_SIZE - addy < access_size) {
+                    MINIRV64_RETURN_TRAP();
+                }
 
-                switch ((ir >> 12) & 0x7) {
+                switch (funct3) {
                     case 0: rval = (int64_t)MINIRV64_LOAD1_SIGNED(addy); break;
                     case 1: rval = (int64_t)MINIRV64_LOAD2_SIGNED(addy); break;
                     case 2: rval = (int64_t)MINIRV64_LOAD4_SIGNED(addy); break;
@@ -253,7 +275,7 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
                     case 4: rval = MINIRV64_LOAD1(addy); break;
                     case 5: rval = MINIRV64_LOAD2(addy); break;
                     case 6: rval = (uint64_t)MINIRV64_LOAD4(addy); break;
-                    default: return RV64_TRAP;
+                    default: MINIRV64_RETURN_TRAP();
                 }
                 break;
             }
@@ -264,57 +286,65 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
                 uint64_t rs2 = state->regs[(ir >> 20) & 0x1f];
                 int64_t imm = (((int64_t)(int32_t)ir >> 20) & ~0x1fULL) | ((ir >> 7) & 0x1f);
                 uint64_t addy = rs1 + imm - MINIRV64_RAM_IMAGE_OFFSET;
+                uint32_t funct3 = (ir >> 12) & 0x7;
+                uint64_t access_size = 1ULL << (funct3 & 3);
                 rdid = 0;
-                if (addy >= MINI_RV64_RAM_SIZE) return RV64_TRAP;
+                if (addy >= MINI_RV64_RAM_SIZE || MINI_RV64_RAM_SIZE - addy < access_size) {
+                    MINIRV64_RETURN_TRAP();
+                }
 
-                switch ((ir >> 12) & 0x7) {
+                switch (funct3) {
                     case 0: MINIRV64_STORE1(addy, rs2); break;
                     case 1: MINIRV64_STORE2(addy, rs2); break;
                     case 2: MINIRV64_STORE4(addy, rs2); break;
                     case 3: MINIRV64_STORE8(addy, rs2); break;
-                    default: return RV64_TRAP;
+                    default: MINIRV64_RETURN_TRAP();
                 }
                 break;
             }
+
+            case 0x0F: // MISC-MEM: FENCE / FENCE.I
+                rdid = 0;
+                break;
 
             case 0x13: // OP-IMM
             {
                 int64_t imm = (int64_t)(int32_t)ir >> 20;
                 uint64_t rs1 = state->regs[(ir >> 15) & 0x1f];
                 uint32_t funct3 = (ir >> 12) & 0x7;
-                uint32_t funct7 = (ir >> 25) & 0x7f;
+                uint32_t funct6 = (ir >> 26) & 0x3f; // Upper 6 bits for 64-bit shifts
                 uint32_t shamt = (ir >> 20) & 0x3f;
 
                 switch (funct3) {
                     case 0: rval = rs1 + imm; break;                                       // ADDI
                     case 1:
-                        if (funct7 == 0x00) rval = rs1 << shamt;                           // SLLI
+                        if (funct6 == 0x00) rval = rs1 << shamt;                           // SLLI
 #ifdef MINIRV64_ENABLE_BITMAN
-                        else if (funct7 == 0x14) rval = rs1 | (1ULL << shamt);             // BSETI (Zbs)
-                        else if (funct7 == 0x24) rval = rs1 & ~(1ULL << shamt);            // BCLRI (Zbs)
-                        else if (funct7 == 0x34) rval = rs1 ^ (1ULL << shamt);             // BINVI (Zbs)
+                        else if (funct6 == 0x0A) rval = rs1 | (1ULL << shamt);             // BSETI (Zbs)
+                        else if (funct6 == 0x12) rval = rs1 & ~(1ULL << shamt);            // BCLRI (Zbs)
+                        else if (funct6 == 0x1A) rval = rs1 ^ (1ULL << shamt);             // BINVI (Zbs)
                         else if ((ir >> 20) == 0x600) rval = rv64_clz(rs1);                // CLZ (Zbb)
                         else if ((ir >> 20) == 0x601) rval = rv64_ctz(rs1);                // CTZ (Zbb)
                         else if ((ir >> 20) == 0x602) rval = rv64_cpop(rs1);               // CPOP (Zbb)
                         else if ((ir >> 20) == 0x604) rval = (int64_t)(int8_t)rs1;         // SEXT.B (Zbb)
                         else if ((ir >> 20) == 0x605) rval = (int64_t)(int16_t)rs1;        // SEXT.H (Zbb)
 #endif
-                        else return RV64_TRAP;
+                        else MINIRV64_RETURN_TRAP();
                         break;
                     case 2: rval = ((int64_t)rs1 < imm) ? 1 : 0; break;                    // SLTI
                     case 3: rval = (rs1 < (uint64_t)imm) ? 1 : 0; break;                   // SLTIU
                     case 4: rval = rs1 ^ imm; break;                                       // XORI
                     case 5:
-                        if (funct7 == 0x00) rval = rs1 >> shamt;                           // SRLI
-                        else if (funct7 == 0x20) rval = (int64_t)rs1 >> shamt;             // SRAI
+                        if (funct6 == 0x00) rval = rs1 >> shamt;                           // SRLI
+                        else if (funct6 == 0x10) rval = (int64_t)rs1 >> shamt;             // SRAI
 #ifdef MINIRV64_ENABLE_BITMAN
-                        else if (funct7 == 0x24) rval = (rs1 >> shamt) & 1ULL;             // BEXTI (Zbs)
-                        else if (funct7 == 0x30) rval = (rs1 >> shamt) | (rs1 << ((64 - shamt) & 63)); // RORI (Zbb)
+                        else if (funct6 == 0x12) rval = (rs1 >> shamt) & 1ULL;             // BEXTI (Zbs)
+                        else if (funct6 == 0x18) rval = (rs1 >> shamt) | (rs1 << ((64 - shamt) & 63)); // RORI (Zbb)
                         else if ((ir >> 20) == 0x287) rval = rv64_orcb(rs1);               // ORC.B (Zbb)
                         else if ((ir >> 20) == 0x687) rval = rv64_brev8(rs1);              // BREV8 (Zbkb)
                         else if ((ir >> 20) == 0x6B8) rval = rv64_rev8(rs1);               // REV8 (Zbb/Zbkb)
 #endif
-                        else return RV64_TRAP;
+                        else MINIRV64_RETURN_TRAP();
                         break;
                     case 6: rval = rs1 | imm; break;                                       // ORI
                     case 7: rval = rs1 & imm; break;                                       // ANDI
@@ -328,29 +358,31 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
                 uint32_t rs1 = (uint32_t)state->regs[(ir >> 15) & 0x1f];
                 uint32_t funct3 = (ir >> 12) & 0x7;
                 uint32_t funct7 = (ir >> 25) & 0x7f;
-                uint32_t shamt = (ir >> 20) & 0x1f;
+                uint32_t funct6 = (ir >> 26) & 0x3f;
+                uint32_t shamt5 = (ir >> 20) & 0x1f;
+                uint32_t shamt6 = (ir >> 20) & 0x3f;
 
                 switch (funct3) {
-                    case 0: rval = (int64_t)(int32_t)(rs1 + imm); break;                  // ADDIW
+                    case 0: rval = (int64_t)(int32_t)(rs1 + imm); break;                   // ADDIW
                     case 1:
-                        if (funct7 == 0x00) rval = (int64_t)(int32_t)(rs1 << shamt);      // SLLIW
+                        if (funct7 == 0x00) rval = (int64_t)(int32_t)(rs1 << shamt5);      // SLLIW
 #ifdef MINIRV64_ENABLE_BITMAN
-                        else if (funct7 == 0x04) rval = (uint64_t)rs1 << shamt;           // SLLI.UW (Zba)
-                        else if ((ir >> 20) == 0x600) rval = rv64_clzw(rs1);              // CLZW (Zbb)
-                        else if ((ir >> 20) == 0x601) rval = rv64_ctzw(rs1);              // CTZW (Zbb)
-                        else if ((ir >> 20) == 0x602) rval = rv64_cpopw(rs1);             // CPOPW (Zbb)
+                        else if (funct6 == 0x02) rval = (uint64_t)rs1 << shamt6;           // SLLI.UW (Zba, 6-bit shamt)
+                        else if ((ir >> 20) == 0x600) rval = rv64_clzw(rs1);               // CLZW (Zbb)
+                        else if ((ir >> 20) == 0x601) rval = rv64_ctzw(rs1);               // CTZW (Zbb)
+                        else if ((ir >> 20) == 0x602) rval = rv64_cpopw(rs1);              // CPOPW (Zbb)
 #endif
-                        else return RV64_TRAP;
+                        else MINIRV64_RETURN_TRAP();
                         break;
                     case 5:
-                        if (funct7 == 0x00) rval = (int64_t)(int32_t)(rs1 >> shamt);      // SRLIW
-                        else if (funct7 == 0x20) rval = (int64_t)(int32_t)((int32_t)rs1 >> shamt); // SRAIW
+                        if (funct7 == 0x00) rval = (int64_t)(int32_t)(rs1 >> shamt5);      // SRLIW
+                        else if (funct7 == 0x20) rval = (int64_t)(int32_t)((int32_t)rs1 >> shamt5); // SRAIW
 #ifdef MINIRV64_ENABLE_BITMAN
-                        else if (funct7 == 0x30) rval = (int64_t)(int32_t)((rs1 >> shamt) | (rs1 << ((32 - shamt) & 31))); // RORIW (Zbb)
+                        else if (funct7 == 0x30) rval = (int64_t)(int32_t)((rs1 >> shamt5) | (rs1 << ((32 - shamt5) & 31))); // RORIW (Zbb)
 #endif
-                        else return RV64_TRAP;
+                        else MINIRV64_RETURN_TRAP();
                         break;
-                    default: return RV64_TRAP;
+                    default: MINIRV64_RETURN_TRAP();
                 }
                 break;
             }
@@ -365,24 +397,24 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
                 if (funct7 == 0x00) {
                     switch (funct3) {
                         case 0: rval = rs1 + rs2; break;                                   // ADD
-                        case 1: rval = rs1 << (rs2 & 63); break;                          // SLL
+                        case 1: rval = rs1 << (rs2 & 63); break;                           // SLL
                         case 2: rval = ((int64_t)rs1 < (int64_t)rs2) ? 1 : 0; break;       // SLT
-                        case 3: rval = (rs1 < rs2) ? 1 : 0; break;                        // SLTU
+                        case 3: rval = (rs1 < rs2) ? 1 : 0; break;                         // SLTU
                         case 4: rval = rs1 ^ rs2; break;                                   // XOR
-                        case 5: rval = rs1 >> (rs2 & 63); break;                          // SRL
+                        case 5: rval = rs1 >> (rs2 & 63); break;                           // SRL
                         case 6: rval = rs1 | rs2; break;                                   // OR
                         case 7: rval = rs1 & rs2; break;                                   // AND
                     }
                 } else if (funct7 == 0x20) {
                     switch (funct3) {
                         case 0: rval = rs1 - rs2; break;                                   // SUB
-                        case 5: rval = (int64_t)rs1 >> (rs2 & 63); break;                 // SRA
+                        case 5: rval = (int64_t)rs1 >> (rs2 & 63); break;                  // SRA
 #ifdef MINIRV64_ENABLE_BITMAN
                         case 4: rval = ~(rs1 ^ rs2); break;                                // XNOR (Zbb)
-                        case 6: rval = rs1 | ~rs2; break;                                 // ORN (Zbb)
-                        case 7: rval = rs1 & ~rs2; break;                                 // ANDN (Zbb)
+                        case 6: rval = rs1 | ~rs2; break;                                  // ORN (Zbb)
+                        case 7: rval = rs1 & ~rs2; break;                                  // ANDN (Zbb)
 #endif
-                        default: return RV64_TRAP;
+                        default: MINIRV64_RETURN_TRAP();
                     }
                 } else if (funct7 == 0x01) { // RV64M
                     switch (funct3) {
@@ -391,57 +423,58 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
                         case 2: rval = (uint64_t)(((unsigned __int128)(int64_t)rs1 * rs2) >> 64); break;          // MULHSU
                         case 3: rval = (uint64_t)(((unsigned __int128)rs1 * rs2) >> 64); break;                   // MULHU
                         case 4: if (rs2 == 0) rval = -1ULL; else rval = ((int64_t)rs1 == INT64_MIN && (int64_t)rs2 == -1) ? (uint64_t)rs1 : (uint64_t)((int64_t)rs1 / (int64_t)rs2); break; // DIV
-                        case 5: if (rs2 == 0) rval = -1ULL; else rval = rs1 / rs2; break; // DIVU
-                        case 6: if (rs2 == 0) rval = rs1; else rval = ((int64_t)rs1 == INT64_MIN && (int64_t)rs2 == -1) ? 0 : ((int64_t)rs1 % (int64_t)rs2); break;     // REM
-                        case 7: if (rs2 == 0) rval = rs1; else rval = rs1 % rs2; break;   // REMU
+                        case 5: if (rs2 == 0) rval = -1ULL; else rval = rs1 / rs2; break;  // DIVU
+                        case 6: if (rs2 == 0) rval = rs1; else rval = ((int64_t)rs1 == INT64_MIN && (int64_t)rs2 == -1) ? 0 : (uint64_t)((int64_t)rs1 % (int64_t)rs2); break; // REM
+                        case 7: if (rs2 == 0) rval = rs1; else rval = rs1 % rs2; break;    // REMU
                     }
 #ifdef MINIRV64_ENABLE_BITMAN
                 } else if (funct7 == 0x04) { // Zbkb Pack
                     switch (funct3) {
-                        case 4: rval = (rs1 & 0xFFFFFFFFULL) | (rs2 << 32); break;        // PACK (Zbkb/Zbb)
-                        case 7: rval = (rs1 & 0xFFULL) | ((rs2 & 0xFFULL) << 8); break;   // PACKH (Zbkb/Zbb)
-                        default: return RV64_TRAP;
+                        case 4: rval = (rs1 & 0xFFFFFFFFULL) | (rs2 << 32); break;         // PACK (Zbkb/Zbb)
+                        case 7: rval = (rs1 & 0xFFULL) | ((rs2 & 0xFFULL) << 8); break;    // PACKH (Zbkb/Zbb)
+                        default: MINIRV64_RETURN_TRAP();
                     }
                 } else if (funct7 == 0x05) { // Zbb + Zbc
                     switch (funct3) {
                         case 1: rval = rv64_clmul(rs1, rs2); break;                        // CLMUL (Zbc)
                         case 2: rval = rv64_clmulr(rs1, rs2); break;                       // CLMULR (Zbc)
                         case 3: rval = rv64_clmulh(rs1, rs2); break;                       // CLMULH (Zbc)
-                        case 4: rval = ((int64_t)rs1 < (int64_t)rs2) ? rs1 : rs2; break;  // MIN (Zbb)
+                        case 4: rval = ((int64_t)rs1 < (int64_t)rs2) ? rs1 : rs2; break;   // MIN (Zbb)
                         case 5: rval = (rs1 < rs2) ? rs1 : rs2; break;                     // MINU (Zbb)
-                        case 6: rval = ((int64_t)rs1 > (int64_t)rs2) ? rs1 : rs2; break;  // MAX (Zbb)
+                        case 6: rval = ((int64_t)rs1 > (int64_t)rs2) ? rs1 : rs2; break;   // MAX (Zbb)
                         case 7: rval = (rs1 > rs2) ? rs1 : rs2; break;                     // MAXU (Zbb)
+                        default: MINIRV64_RETURN_TRAP();
                     }
                 } else if (funct7 == 0x10) { // Zba
                     switch (funct3) {
                         case 2: rval = (rs1 << 1) + rs2; break;                            // SH1ADD (Zba)
                         case 4: rval = (rs1 << 2) + rs2; break;                            // SH2ADD (Zba)
                         case 6: rval = (rs1 << 3) + rs2; break;                            // SH3ADD (Zba)
-                        default: return RV64_TRAP;
+                        default: MINIRV64_RETURN_TRAP();
                     }
                 } else if (funct7 == 0x14 && funct3 == 1) {
                     rval = rs1 | (1ULL << (rs2 & 63));                                     // BSET (Zbs)
                 } else if (funct7 == 0x24) {
                     if (funct3 == 1)      rval = rs1 & ~(1ULL << (rs2 & 63));              // BCLR (Zbs)
-                    else if (funct3 == 5) rval = (rs1 >> (rs2 & 63)) & 1ULL;              // BEXT (Zbs)
-                    else return RV64_TRAP;
+                    else if (funct3 == 5) rval = (rs1 >> (rs2 & 63)) & 1ULL;               // BEXT (Zbs)
+                    else MINIRV64_RETURN_TRAP();
                 } else if (funct7 == 0x34 && funct3 == 1) {
                     rval = rs1 ^ (1ULL << (rs2 & 63));                                     // BINV (Zbs)
                 } else if (funct7 == 0x30) {
                     if (funct3 == 1)      rval = (rs1 << (rs2 & 63)) | (rs1 >> ((64 - (rs2 & 63)) & 63)); // ROL (Zbb)
                     else if (funct3 == 5) rval = (rs1 >> (rs2 & 63)) | (rs1 << ((64 - (rs2 & 63)) & 63)); // ROR (Zbb)
-                    else return RV64_TRAP;
+                    else MINIRV64_RETURN_TRAP();
 #endif
 #ifdef MINIRV64_ENABLE_ZICOND
                 } else if (funct7 == 0x07) { // Zicond
                     switch (funct3) {
                         case 5: rval = (rs2 == 0) ? 0 : rs1; break;                        // CZERO.EQZ
                         case 7: rval = (rs2 != 0) ? 0 : rs1; break;                        // CZERO.NEZ
-                        default: return RV64_TRAP;
+                        default: MINIRV64_RETURN_TRAP();
                     }
 #endif
                 } else {
-                    return RV64_TRAP;
+                    MINIRV64_RETURN_TRAP();
                 }
                 break;
             }
@@ -459,13 +492,13 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
                         case 0: rval = (int64_t)(int32_t)(rs1 + rs2); break;               // ADDW
                         case 1: rval = (int64_t)(int32_t)(rs1 << (rs2 & 31)); break;       // SLLW
                         case 5: rval = (int64_t)(int32_t)(rs1 >> (rs2 & 31)); break;       // SRLW
-                        default: return RV64_TRAP;
+                        default: MINIRV64_RETURN_TRAP();
                     }
                 } else if (funct7 == 0x20) {
                     switch (funct3) {
                         case 0: rval = (int64_t)(int32_t)(rs1 - rs2); break;               // SUBW
                         case 5: rval = (int64_t)(int32_t)((int32_t)rs1 >> (rs2 & 31)); break; // SRAW
-                        default: return RV64_TRAP;
+                        default: MINIRV64_RETURN_TRAP();
                     }
                 } else if (funct7 == 0x01) { // RV64M-32
                     switch (funct3) {
@@ -474,36 +507,37 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
                         case 5: if (rs2 == 0) rval = -1ULL; else rval = (int64_t)(int32_t)(rs1 / rs2); break; // DIVUW
                         case 6: if (rs2 == 0) rval = (int64_t)(int32_t)rs1; else rval = (int64_t)(int32_t)(((int32_t)rs1 == INT32_MIN && (int32_t)rs2 == -1) ? 0 : ((int32_t)rs1 % (int32_t)rs2)); break; // REMW
                         case 7: if (rs2 == 0) rval = (int64_t)(int32_t)rs1; else rval = (int64_t)(int32_t)(rs1 % rs2); break; // REMUW
+                        default: MINIRV64_RETURN_TRAP();
                     }
 #ifdef MINIRV64_ENABLE_BITMAN
                 } else if (funct7 == 0x04) {
                     if (funct3 == 0)      rval = (uint64_t)rs1 + full_rs2;                 // ADD.UW (Zba)
                     else if (funct3 == 4) rval = (int64_t)(int32_t)((rs1 & 0xFFFF) | ((rs2 & 0xFFFF) << 16)); // PACKW / ZEXT.H (Zbkb)
-                    else return RV64_TRAP;
+                    else MINIRV64_RETURN_TRAP();
                 } else if (funct7 == 0x10) { // Zba-32
                     switch (funct3) {
-                        case 2: rval = ((uint64_t)rs1 << 1) + full_rs2; break;            // SH1ADD.UW (Zba)
-                        case 4: rval = ((uint64_t)rs1 << 2) + full_rs2; break;            // SH2ADD.UW (Zba)
-                        case 6: rval = ((uint64_t)rs1 << 3) + full_rs2; break;            // SH3ADD.UW (Zba)
-                        default: return RV64_TRAP;
+                        case 2: rval = ((uint64_t)rs1 << 1) + full_rs2; break;             // SH1ADD.UW (Zba)
+                        case 4: rval = ((uint64_t)rs1 << 2) + full_rs2; break;             // SH2ADD.UW (Zba)
+                        case 6: rval = ((uint64_t)rs1 << 3) + full_rs2; break;             // SH3ADD.UW (Zba)
+                        default: MINIRV64_RETURN_TRAP();
                     }
                 } else if (funct7 == 0x30) { // Zbb-32
                     if (funct3 == 1)      rval = (int64_t)(int32_t)((rs1 << (rs2 & 31)) | (rs1 >> ((32 - (rs2 & 31)) & 31))); // ROLW (Zbb)
                     else if (funct3 == 5) rval = (int64_t)(int32_t)((rs1 >> (rs2 & 31)) | (rs1 << ((32 - (rs2 & 31)) & 31))); // RORW (Zbb)
-                    else return RV64_TRAP;
+                    else MINIRV64_RETURN_TRAP();
 #endif
                 } else {
-                    return RV64_TRAP;
+                    MINIRV64_RETURN_TRAP();
                 }
                 break;
             }
 
-            case 0x73: // SYSTEM: ECALL, EBREAK, MRET, and machine CSR instructions
+            case 0x73: // SYSTEM: ECALL, EBREAK, MRET, WFI, and machine CSR instructions
             {
                 uint32_t funct3 = (ir >> 12) & 7;
                 uint32_t csr = ir >> 20;
                 if (funct3 == 0) {
-                    if (ir == 0x00000073) { // ECALL: preserve the existing host-syscall API
+                    if (ir == 0x00000073) { // ECALL
                         pc += ilen;
                         state->pc = pc; state->cycle = cycle;
                         #ifdef MINIRV64_HANDLE_SYSCALL
@@ -515,8 +549,7 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
                         continue;
                     }
                     if (ir == 0x00100073) { // EBREAK
-                        state->pc = pc; state->cycle = cycle;
-                        return RV64_TRAP;
+                        MINIRV64_RETURN_TRAP();
                     }
                     if (ir == 0x30200073) { // MRET
                         uint64_t old_status = state->mstatus;
@@ -527,42 +560,53 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
                         rdid = 0;
                         break;
                     }
-                    state->pc = pc; state->cycle = cycle;
-                    return RV64_TRAP;
+                    if (ir == 0x10500073) { // WFI (Wait for Interrupt - NOP in single-step loop)
+                        rdid = 0;
+                        break;
+                    }
+                    MINIRV64_RETURN_TRAP();
                 }
 
-                uint64_t old_csr;
+                uint64_t old_csr = 0;
+                int csr_readonly = 0;
                 switch (csr) {
                     case 0x300: old_csr = state->mstatus; break;
+                    case 0x301: old_csr = (2ULL << 62) | (1ULL << 8) | (1ULL << 12); csr_readonly = 1; break; // misa (RV64IM)
                     case 0x304: old_csr = state->mie; break;
                     case 0x305: old_csr = state->mtvec; break;
+                    case 0x340: old_csr = state->mscratch; break;
                     case 0x341: old_csr = state->mepc; break;
                     case 0x342: old_csr = state->mcause; break;
                     case 0x343: old_csr = state->mtval; break;
                     case 0x344: old_csr = state->mip; break;
+                    case 0xB00: case 0xC00:
+                    case 0xB02: case 0xC02: old_csr = cycle; csr_readonly = (csr >= 0xC00); break; // [m]cycle / [m]instret
+                    case 0xF11: case 0xF12: case 0xF13: case 0xF14: old_csr = 0; csr_readonly = 1; break; // mvendorid/marchid/mimpid/mhartid
                     default:
-                        state->pc = pc; state->cycle = cycle;
-                        return RV64_TRAP;
+                        MINIRV64_RETURN_TRAP();
                 }
+
                 uint32_t rs1 = (ir >> 15) & 0x1f;
                 uint64_t source = (funct3 & 4) ? rs1 : state->regs[rs1];
                 uint64_t new_csr = old_csr;
                 int write_csr = 1;
                 switch (funct3) {
                     case 1: case 5: new_csr = source; break; // CSRRW[I]
-                    case 2: case 6: if (source) new_csr = old_csr | source; else write_csr = 0; break; // CSRRS[I]
-                    case 3: case 7: if (source) new_csr = old_csr & ~source; else write_csr = 0; break; // CSRRC[I]
+                    case 2: case 6: if (rs1) new_csr = old_csr | source; else write_csr = 0; break;  // CSRRS[I]
+                    case 3: case 7: if (rs1) new_csr = old_csr & ~source; else write_csr = 0; break; // CSRRC[I]
                     default:
-                        state->pc = pc; state->cycle = cycle;
-                        return RV64_TRAP;
+                        MINIRV64_RETURN_TRAP();
                 }
+
                 if (write_csr) {
+                    if (csr_readonly) MINIRV64_RETURN_TRAP();
                     switch (csr) {
                         case 0x300:
                             state->mstatus = (new_csr & (MINIRV64_MSTATUS_MIE | MINIRV64_MSTATUS_MPIE)) | MINIRV64_MSTATUS_MPP;
                             break;
                         case 0x304: state->mie = new_csr & MINIRV64_MIP_MASK; break;
                         case 0x305: state->mtvec = (new_csr & ~3ULL) | ((new_csr & 3ULL) == 1 ? 1ULL : 0ULL); break;
+                        case 0x340: state->mscratch = new_csr; break;
                         case 0x341: state->mepc = new_csr & ~3ULL; break;
                         case 0x342: state->mcause = new_csr; break;
                         case 0x343: state->mtval = new_csr; break;
@@ -571,13 +615,14 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
                             state->mip = (state->mip & ~(1ULL << MINIRV64_IRQ_MSIP)) |
                                           (new_csr & (1ULL << MINIRV64_IRQ_MSIP));
                             break;
+                        case 0xB00: case 0xB02: cycle = new_csr; break;
                     }
                 }
                 rval = old_csr;
                 break;
             }
 
-            default: return RV64_TRAP;
+            default: MINIRV64_RETURN_TRAP();
         }
 
         if (rdid) state->regs[rdid] = rval;
@@ -595,4 +640,4 @@ MINIRV64_DECORATE int32_t MiniRV64Step(struct MiniRV64State *state, uint8_t *ima
 }
 #endif
 
-#endif // _MINI_RV64_H	
+#endif // _MINI_RV64_H
