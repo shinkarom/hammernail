@@ -1,3 +1,5 @@
 build/*
 !build/CMakeLists.txt
 bin/*.exe
+cart/.zig-cache
+cart/zig-out
